@@ -1,0 +1,335 @@
+---
+title: "Cyclistic Case Study: Analyze Phase"
+author: "Shresth"
+date: "2025-05-01"
+output: html_document
+---
+
+# Introduction
+
+This case study explores how annual members and casual riders use the Cyclistic bike-share system differently. The analysis is based on cleaned Q1 datasets from 2019 and 2020, prepared as part of the Google Data Analytics Capstone Project.
+
+The business objective is to identify usage trends and behavioral differences that can inform a marketing strategy to convert more casual riders into annual members.
+
+The following R analysis includes: - Descriptive statistics of ride patterns - Aggregated comparisons between user types - Visualizations of usage trends by day of the week and demographic segments
+
+The ultimate goal is to derive actionable insights from user behavior that can support strategic decision-making.
+
+# Installing Packages
+
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(janitor)
+library(here)
+library(scales)
+```
+
+# Collect Data
+
+We cleaned two files 'Divvy_trips_2019_Q1.xlsx' and 'Divvy_trips_2020_Q1.xlsx' and their cleaned data is saved in Cleaned_data directory, which is why we installed 'here' library to work with structured paths
+
+```{r}
+df_2019 <- read_excel(here("Cleaned_data","Divvy_Trips_2019_Q1_cleaned.xlsx"))
+df_2020 <- read_excel(here("Cleaned_data","Divvy_Trips_2020_Q1_cleaned.xlsx"))
+```
+
+Preview of both dataset
+
+```{r}
+head(df_2019)
+```
+
+```{r}
+head(df_2020)
+```
+
+# Checking Column names for merging
+
+```{r}
+colnames(df_2019)
+```
+
+```{r}
+colnames(df_2020)
+
+```
+
+# Combining into a single file
+
+```{r}
+(df_2019<-rename(df_2019, ride_id = trip_id,
+                rideable_type=bikeid,
+                started_at = start_time,
+                ended_at = end_time,
+                start_station_name = from_station_name,
+                start_station_id = from_station_id,
+                end_station_name = to_station_name,
+                end_station_id = to_station_id,
+                member_casual = usertype))
+
+```
+
+## Inspecting the dataset
+
+```{r}
+head(df_2019)
+```
+
+## Mutating rows to same datatype for binding
+
+'ride_id' in df_2019 is of double data type while in 2020 it is of character, which would throw error while binding, so we need to mutate the row to be of same data type. The same reason applies to 'rideable_type;
+
+```{r}
+df_2019 <- mutate(df_2019, ride_id = as.character(ride_id),
+                  rideable_type= as.character(rideable_type))
+```
+
+```{r}
+all_trips <-bind_rows(df_2019, df_2020)
+head(all_trips)
+```
+
+As it seems that certain rows are not required for the analysis, it is better to remove them.
+
+```{r}
+all_trips <- all_trips %>%
+select(-c(start_lat, start_lng, end_lat, end_lng, birthyear, gender, tripduration, age_group))
+head(all_trips)
+```
+
+# Data Cleaning and analysis
+
+```{r}
+colnames(all_trips)
+nrow(all_trips)
+dim(all_trips)
+head(all_trips)
+str(all_trips)
+summary(all_trips)
+```
+
+``` markdown
+The dataset contains `r nrow(all_trips)` rows and has the following dimensions: `r dim(all_trips)[1]` rows × `r dim(all_trips)[2]` columns.
+```
+
+The member_casual of the aggregated dataset contains 4 kinds of values, but the user of cyclistic is divided into casual and members, so we need to make the data uniform by changing *Subscriber* and *Customer* to *member* and *casual* respectively or vice-versa. But we will go with 2020 labels.
+
+```{r}
+unique(all_trips$member_casual)
+```
+
+Let's change the data to have uniform membership tag across the data set
+
+```{r}
+all_trips <- all_trips %>% mutate(member_casual = recode(member_casual, "Subscriber" = "member", "Customer" = "casual"))
+unique(all_trips$member_casual)
+```
+
+## Adding date details to the table
+
+We already added day_of_week to the table while working on data with excel, but we might need other date details to aggregate ride data based for each day, month or year
+
+```{r}
+all_trips$date <- as.Date(all_trips$started_at)
+all_trips$month <- format(as.Date(all_trips$started_at),"%m")
+all_trips$day <- format(as.Date(all_trips$started_at),"%d")
+all_trips$year <- format(as.Date(all_trips$started_at),"%Y")
+
+```
+
+## Final Data Integrity Check
+
+Although the majority of data cleaning such as removing rides with negative or zero duration and unusually long trips was completed during the Excel preprocessing stage, we now perform a final integrity check within R.
+
+In some cases, system-generated test rides (e.g., starting from `"HQ QR"` stations) or bad data entries may still exist in the merged dataset. These rides are not representative of real customer behavior and can bias the results.
+
+The following step filters out: - Rides that started from `"HQ QR"` — often used by Divvy staff for testing or maintenance - Any remaining rides with negative ride lengths (in case of data merge inconsistencies)
+
+We store the result in a new data frame for clean analysis going forward.
+
+```{r}
+all_trips$ride_length <- difftime(all_trips$ended_at, all_trips$started_at, units = "mins")
+all_trips$ride_length <- as.numeric(all_trips$ride_length)
+
+
+```
+
+```{r}
+all_trips <- all_trips[!(all_trips$start_station_name == "HQ QR" | all_trips$ride_length<0),]
+```
+
+## Descriptive Analysis
+
+Now that we got data cleaning out of the way, it's time to do some analysis. To understand how casual riders and annual members differ in their riding behavior, we’ll start by comparing their ride durations. Below, we calculate the **mean**, **median**, **maximum**, and **minimum** ride lengths for each user type. This helps us see not only how long each group typically rides, but also how extreme the shortest and longest rides can get.
+
+```{r}
+aggregate(all_trips$ride_length~all_trips$member_casual, FUN = mean)
+aggregate(all_trips$ride_length~all_trips$member_casual,FUN = median)
+aggregate(all_trips$ride_length~all_trips$member_casual,FUN = max)
+aggregate(all_trips$ride_length~all_trips$member_casual,FUN = min)
+```
+
+Now let's find the average ride time based on the day of the week
+
+```{r}
+aggregate(all_trips$ride_length~all_trips$member_casual + all_trips$day_of_week,FUN = mean)
+```
+
+It seems like the day of the week is not properly ordered, we need to fix that.
+
+```{r}
+all_trips$day_of_week <- factor(all_trips$day_of_week,
+                                levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"),
+                                ordered = TRUE)
+
+```
+
+Now let's run the average time again
+
+```{r}
+aggregate(all_trips$ride_length~all_trips$member_casual + all_trips$day_of_week,FUN = mean)
+
+```
+
+Since we need to work on visualization it is better to store the day of week as abbreviated terms in a new row.
+
+```{r}
+all_trips$weekday <- wday(all_trips$started_at, label = TRUE, abbr = TRUE)
+
+```
+
+Let's check if `weekday` is a factor with the correct weekday order.
+
+```{r}
+levels(all_trips$weekday)
+```
+
+Seems like it is properly ordered. Now it is time for *Visualization*
+
+## Visualisation
+
+Now we’ll use `ggplot2` to visualize the average ride duration and number of rides by rider type.\
+But first, we’ll store the summarized table in a variable to keep the plotting code clean and more readable.
+
+```{r}
+summarized_table <- all_trips %>%
+  group_by(member_casual, weekday) %>%
+  summarise(
+    number_of_rides = n(),
+    average_duration = mean(ride_length, na.rm = TRUE)
+  ) %>%
+  arrange(member_casual, weekday)
+```
+
+Checking the `summarized_table`
+
+```{r}
+summarized_table
+```
+
+Now the data is ready for visualisation. Let's first create number of rides by rider type
+
+```{r}
+ggplot(summarized_table, mapping = aes(weekday, number_of_rides, fill = member_casual)) + geom_col(position = "dodge")
+```
+
+Well the visualisation works but the y-axis can be more human readable, let's change that.
+
+```{r}
+ggplot(summarized_table, aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = comma) +
+  labs(y = "Number of Rides", x = "Weekday", fill = "Rider Type") +
+  theme_minimal()
+```
+
+Now let's see visualisation for average duration by biker type
+
+```{r}
+ggplot(summarized_table, mapping = aes(x = weekday, y = average_duration, fill = member_casual)) + geom_col(position = "dodge")
+```
+
+## Conclusion
+
+The analysis reveals clear differences in how casual riders and annual members use the Cyclistic bike-share system:
+
+-   **Ride Frequency**:\
+    Annual members take significantly more rides during weekdays, suggesting that they use bikes for commuting or routine travel. In contrast, casual riders are more active on weekends, implying recreational use.
+
+-   **Ride Duration**:\
+    Casual riders consistently have much longer average ride durations than members across all days of the week — especially on Thursdays and Fridays. This supports the idea that casual riders are exploring or riding for leisure rather than quick, practical trips.
+
+### Key Takeaways for the Marketing Team:
+
+-   To convert casual users into members, consider targeting **weekend riders** with incentives like “Weekend Membership Trials” or “Leisure Plans”.
+-   Casual riders might be more likely to convert if offered value based on **longer duration needs**, such as day passes that transition into discounted membership options.
+-   Messaging should be tailored around **exploration, flexibility, and savings for longer rides**, which casual users clearly favor.
+
+These insights will serve as the foundation for strategic recommendations in the next phase of the case study.\
+\
+
+  ## Bonus Visualizations
+
+Beyond the core weekday analysis, we explored additional trends to better understand user behavior. These visualizations provide further insights that could support more targeted marketing strategies.
+
+### Ride count by hour of the day(faceted by user type)
+```{r}
+all_trips %>%
+  mutate(hour = hour(started_at)) %>%
+  group_by(member_casual, hour) %>%
+  summarise(rides = n(), .groups = "drop") %>%
+  ggplot(aes(x = hour, y = rides, fill = member_casual)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~member_casual) +
+  labs(title = "Ride Count by Hour of Day", x = "Hour", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### Ride duration distribution by user type (box plot)
+
+```{r}
+ggplot(all_trips, aes(x = member_casual, y = ride_length, fill = member_casual)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 60)) +  # Focus on rides < 60 min
+  labs(title = "Ride Duration Distribution", y = "Duration (minutes)", x = "User Type") +
+  theme_minimal()
+
+```
+
+### Rides by age group
+
+```{r}
+df_2019$day_of_week <- factor(df_2019$day_of_week,
+                                levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"),
+                                ordered = TRUE)
+df_2019$weekday <- wday(df_2019$started_at, label = TRUE, abbr = TRUE)
+```
+
+
+```{r}
+age_weekday_summary <- df_2019 %>% filter(age_group!="Unknown") %>% 
+  group_by(age_group, weekday) %>% summarise(rides=n(), .groups = "drop")
+```
+
+*Grouped Bar chart*
+```{r}
+ggplot(age_weekday_summary, aes(x = weekday, y = rides, fill = age_group)) +
+  geom_col(position = "dodge") +
+  labs(title = "Ride Count by Weekday and Age Group",
+       x = "Weekday", y = "Number of Rides", fill = "Age Group") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(age_weekday_summary, aes(x = weekday, y = rides, fill = weekday)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ age_group) +
+  labs(title = "Ride Frequency by Weekday per Age Group",
+       x = "Weekday", y = "Number of Rides") +
+  theme_minimal()
+
+```
+
